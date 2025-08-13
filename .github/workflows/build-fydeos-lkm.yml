@@ -56,10 +56,31 @@ jobs:
           sudo ln -s --force python3 /usr/bin/python
 
           export LLVM_VERSION=14
-          wget --timeout=30 https://apt.llvm.org/llvm.sh
+          # 优化：增加下载重试机制（最多3次）和备用源
+          for i in {1..3}; do
+            # 主源：apt.llvm.org
+            if wget --timeout=30 https://apt.llvm.org/llvm.sh; then
+              echo "Successfully downloaded llvm.sh from main source"
+              break
+            else
+              echo "Attempt $i failed, trying backup source..."
+              # 备用源：GitHub 官方仓库镜像
+              if wget --timeout=30 https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/utils/release/llvm.sh; then
+                echo "Successfully downloaded llvm.sh from backup source"
+                break
+              fi
+            fi
+            # 3次都失败则退出
+            if [ $i -eq 3 ]; then
+              echo "Error: Failed to download llvm.sh after 3 attempts"
+              exit 1
+            fi
+          done
+
           chmod +x llvm.sh
           sudo ./llvm.sh $LLVM_VERSION
           rm ./llvm.sh
+          # 链接工具链
           for tool in clang ld.lld llvm-objdump llvm-ar llvm-nm llvm-strip llvm-objcopy llvm-readelf clang++; do
             sudo ln -s --force /usr/bin/$tool-$LLVM_VERSION /usr/bin/$tool
           done
