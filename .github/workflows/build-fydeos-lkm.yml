@@ -1,4 +1,4 @@
-name: Build FydeOS KernelSU LKM (x86_64)
+name: Build FydeOS KernelSU LKM (x86_64) with 6.6 Kernel
 on:
   push:
     branches: ["main", "ci", "dev"]
@@ -20,7 +20,8 @@ on:
         default: false
 
 env:
-  git_tag: chromeos-5.15
+  # 切换为 6.6 版本的 ChromeOS 内核分支（根据实际分支名调整）
+  git_tag: chromeos-6.6
 
 jobs:
   build-lkm:
@@ -28,7 +29,7 @@ jobs:
       (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'push') ||
       (github.event_name == 'pull_request' && !github.event.pull_request.draft)
-    name: Build FydeOS x86_64 KernelSU LKM
+    name: Build FydeOS x86_64 KernelSU LKM (6.6 Kernel)
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -55,8 +56,8 @@ jobs:
 
           sudo ln -s --force python3 /usr/bin/python
 
-          export LLVM_VERSION=14
-          # 增加下载重试机制和备用源
+          # 6.6 内核推荐使用 LLVM 16+（兼容性更好）
+          export LLVM_VERSION=16
           for i in {1..3}; do
             if wget --timeout=30 https://apt.llvm.org/llvm.sh; then
               echo "Successfully downloaded llvm.sh from main source"
@@ -77,7 +78,6 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh $LLVM_VERSION
           rm ./llvm.sh
-          # 链接工具链
           for tool in clang ld.lld llvm-objdump llvm-ar llvm-nm llvm-strip llvm-objcopy llvm-readelf clang++; do
             sudo ln -s --force /usr/bin/$tool-$LLVM_VERSION /usr/bin/$tool
           done
@@ -88,8 +88,9 @@ jobs:
           path: KernelSU
           fetch-depth: 0
 
-      - name: Setup kernel source
+      - name: Setup 6.6 kernel source
         run: |
+          # 克隆 6.6 版本的 ChromeOS 内核（分支名可能需要微调）
           git clone --depth=1 --branch ${{ env.git_tag }} \
             https://chromium.googlesource.com/chromiumos/third_party/kernel \
             || { echo "Clone failed, retrying..."; git clone --depth=1 --branch ${{ env.git_tag }} https://chromium.googlesource.com/chromiumos/third_party/kernel; }
@@ -127,7 +128,7 @@ jobs:
           echo "KernelSU version: $KSU_VERSION"
           echo "kernelsu_version=$KSU_VERSION" >> $GITHUB_ENV
 
-      - name: Configure kernel for modules
+      - name: Configure 6.6 kernel for modules
         working-directory: kernel
         run: |
           export DEFCONFIG=x86_64_defconfig
@@ -139,39 +140,33 @@ jobs:
             -e KSU \
             -d MODULE_SIG \
             -d MODULE_SIG_ALL \
-            -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN
+            -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN \
+            # 6.6 内核默认支持 LRU_GEN，无需额外禁用
+            -e CONFIG_LRU_GEN # 确保启用该特性（解决之前的符号问题）
 
-      - name: Build kernel and LKM
+      - name: Build 6.6 kernel and LKM
         working-directory: kernel
         run: |
-          # 第一步：优先编译内核核心（生成 vmlinux.symvers 符号文件）
-          echo "=== Compiling kernel core (vmlinux) to generate symbols ==="
+          # 优先编译内核核心生成符号文件
+          echo "=== Compiling 6.6 kernel core (vmlinux) ==="
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux
           
-          # 第二步：基于生成的符号文件编译模块
-          echo "=== Compiling kernel modules (using vmlinux.symvers) ==="
+          # 编译模块
+          echo "=== Compiling modules ==="
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules
           
-          # 检查关键文件是否生成（解决符号缺失和 modules.builtin 问题）
-          if [ ! -f "vmlinux.symvers" ]; then
-            echo "Error: vmlinux.symvers not found! Kernel core compilation failed."
-            exit 1
-          fi
-          if [ ! -f "modules.order" ]; then
-            echo "Error: modules.order not found! Module compilation failed."
-            exit 1
-          fi
-          if [ ! -f "modules.builtin" ]; then
-            echo "Error: modules.builtin not found! Module compilation failed."
+          # 检查关键文件
+          if [ ! -f "vmlinux.symvers" ] || [ ! -f "modules.order" ] || [ ! -f "modules.builtin" ]; then
+            echo "Error: Missing critical compilation files!"
             exit 1
           fi
           
-          # 第三步：编译内核镜像（bzImage）
-          echo "=== Compiling kernel image (bzImage) ==="
+          # 编译内核镜像
+          echo "=== Compiling bzImage ==="
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
           
-          # 第四步：安装模块到本地目录
-          echo "=== Installing modules to local directory ==="
+          # 安装模块
+          echo "=== Installing modules ==="
           mkdir -p ./modules
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) \
             INSTALL_MOD_PATH=./modules modules_install
@@ -187,7 +182,7 @@ jobs:
           fi
           modinfo ${{ env.ko_path }}
 
-      - name: Upload kernelsu.ko
+      - name: Upload kernelsu.ko (6.6 Kernel)
         uses: actions/upload-artifact@v4
         with:
           name: kernelsu-ko-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
