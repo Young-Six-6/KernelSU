@@ -1,30 +1,53 @@
 name: Build FydeOS KernelSU LKM (x86_64)
 on:
+  # 保留原有触发条件，扩大路径范围避免漏触发
   push:
-    branches: ["main"]
+    branches: ["main", "ci", "dev"]  # 增加常用开发分支
     paths:
       - ".github/workflows/build-fydeos-lkm.yml"
       - "kernel/**"
+      - "drivers/kernelsu/**"  # 增加KernelSU核心目录监控
   pull_request:
     branches: ["main"]
     paths:
       - ".github/workflows/build-fydeos-lkm.yml"
       - "kernel/**"
+      - "drivers/kernelsu/**"
+  # 优化手动触发配置，支持输入参数（可选）
   workflow_dispatch:
+    inputs:
+      debug:
+        description: "Enable debug mode"
+        type: boolean
+        default: false
 
 env:
-  git_tag: chromeos-5.15  # FydeOS基于的ChromeOS内核版本
+  git_tag: chromeos-5.15  # 保持内核版本一致
 
 jobs:
   build-lkm:
-    if: github.event_name != 'pull_request' || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
+    # 简化条件判断，确保手动触发时必执行
+    if: |
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'push') ||
+      (github.event_name == 'pull_request' && !github.event.pull_request.draft)
     name: Build FydeOS x86_64 KernelSU LKM
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04  # 更换为更稳定的22.04版本（资源更充足）
+    permissions:  # 显式声明权限，避免默认权限不足
+      contents: read
+      actions: read
+      artifacts: write  # 确保能上传产物
     env:
       LTO: thin
       KERNEL_DIR: ${{ github.workspace }}/kernel
 
     steps:
+      # 增加清理步骤，释放磁盘空间（避免 runner 空间不足）
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android 2>/dev/null
+          df -h
+
       - name: Install Build Tools
         run: |
           sudo apt-get update
@@ -32,18 +55,16 @@ jobs:
             bc bison build-essential ca-certificates flex git gnupg \
             libelf-dev libssl-dev lsb-release software-properties-common wget \
             libncurses-dev binutils-x86-64-linux-gnu gcc-x86-64-linux-gnu \
-            rsync python3 device-tree-compiler kmod  # 新增kmod用于modinfo验证
+            rsync python3 device-tree-compiler kmod
 
-          # 配置Python3
           sudo ln -s --force python3 /usr/bin/python
 
-          # 安装LLVM 14工具链
+          # 安装LLVM 14（保持版本一致，增加超时控制）
           export LLVM_VERSION=14
-          wget https://apt.llvm.org/llvm.sh
+          wget --timeout=30 https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh $LLVM_VERSION
           rm ./llvm.sh
-          # 建立工具链符号链接
           for tool in clang ld.lld llvm-objdump llvm-ar llvm-nm llvm-strip llvm-objcopy llvm-readelf clang++; do
             sudo ln -s --force /usr/bin/$tool-$LLVM_VERSION /usr/bin/$tool
           done
@@ -52,13 +73,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: KernelSU
-          ref: main
-          fetch-depth: 0
+          fetch-depth: 0  # 确保能获取完整历史（计算版本用）
 
       - name: Setup kernel source
         run: |
-          # 克隆ChromeOS内核源码（FydeOS基于此）
-          git clone https://chromium.googlesource.com/chromiumos/third_party/kernel -b ${{ env.git_tag }}
+          # 克隆内核源码，增加超时和重试机制
+          git clone --depth=1 --branch ${{ env.git_tag }} \
+            https://chromium.googlesource.com/chromiumos/third_party/kernel \
+            || { echo "Clone failed, retrying..."; git clone --depth=1 --branch ${{ env.git_tag }} https://chromium.googlesource.com/chromiumos/third_party/kernel; }
 
       - name: Extract kernel version
         working-directory: kernel
@@ -75,24 +97,20 @@ jobs:
           KERNEL_ROOT=$GITHUB_WORKSPACE/kernel
           echo "[+] Kernel root: $KERNEL_ROOT"
 
-          # 链接KernelSU驱动到内核目录
           ln -sf $GITHUB_WORKSPACE/KernelSU/kernel $KERNEL_ROOT/drivers/kernelsu
 
-          # 修改内核Makefile和Kconfig，添加KernelSU
           DRIVER_MAKEFILE=$KERNEL_ROOT/drivers/Makefile
           DRIVER_KCONFIG=$KERNEL_ROOT/drivers/Kconfig
           grep -q "kernelsu" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "$DRIVER_MAKEFILE"
           grep -q "kernelsu" "$DRIVER_KCONFIG" || sed -i "/endmenu/i\\source \"drivers/kernelsu/Kconfig\"" "$DRIVER_KCONFIG"
 
-          # 关键：将KernelSU配置为模块（CONFIG_KSU=m）
+          # 模块化配置（核心步骤不变）
           KSU_KCONFIG=$KERNEL_ROOT/drivers/kernelsu/Kconfig
-          sed -i 's/bool "KernelSU support"/tristate "KernelSU support"/' $KSU_KCONFIG  # 支持模块编译
-          sed -i 's/default y/default m/' $KSU_KCONFIG  # 默认编译为模块
+          sed -i 's/bool "KernelSU support"/tristate "KernelSU support"/' $KSU_KCONFIG
+          sed -i 's/default y/default m/' $KSU_KCONFIG
 
-          # 移除版本号中的dirty标记
           sed -i 's/-dirty//g' $KERNEL_ROOT/scripts/setlocalversion
 
-          # 计算KernelSU版本
           cd $GITHUB_WORKSPACE/KernelSU
           KSU_VERSION=$(($(git rev-list --count HEAD) + 10200))
           echo "KernelSU version: $KSU_VERSION"
@@ -102,40 +120,30 @@ jobs:
         working-directory: kernel
         run: |
           export DEFCONFIG=x86_64_defconfig
-
-          # 清理并生成默认配置
           make LLVM=1 LLVM_IAS=1 O=${PWD} mrproper
           make LLVM=1 LLVM_IAS=1 O=${PWD} ${DEFCONFIG} < /dev/null
-
-          # 启用模块支持并禁用模块签名
           scripts/config --file .config \
-            -e MODULES \                   # 启用内核模块
-            -e MODULE_UNLOAD \             # 允许模块卸载
-            -e KSU \                       # 启用KernelSU（此时为模块模式）
-            -d MODULE_SIG \                 # 禁用模块签名验证（避免加载失败）
+            -e MODULES \
+            -e MODULE_UNLOAD \
+            -e KSU \
+            -d MODULE_SIG \
             -d MODULE_SIG_ALL \
-            -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN  # 保留LTO配置
+            -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN
 
       - name: Build kernel and LKM
         working-directory: kernel
         run: |
-          # 编译内核镜像、模块及模块安装工具
-          make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) \
-            bzImage \          # 内核镜像（可选，主要为了确保配置正确）
-            modules \          # 编译所有模块（包括KernelSU）
-            modules_install    # 安装模块到指定目录
-
-          # 记录KernelSU模块路径
+          # 增加编译超时控制（1小时）
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) \
+            bzImage modules modules_install
           echo "ko_path=${PWD}/drivers/kernelsu/kernelsu.ko" >> $GITHUB_ENV
 
       - name: Verify LKM
         run: |
-          # 检查ko文件是否存在
           if [ ! -f "${{ env.ko_path }}" ]; then
             echo "Error: kernelsu.ko not found!"
             exit 1
           fi
-          # 打印模块信息（确认架构和依赖）
           modinfo ${{ env.ko_path }}
 
       - name: Upload kernelsu.ko
@@ -143,3 +151,4 @@ jobs:
         with:
           name: kernelsu-ko-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
           path: ${{ env.ko_path }}
+          retention-days: 14  # 增加产物保留时间
