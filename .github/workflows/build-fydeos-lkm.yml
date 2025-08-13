@@ -74,39 +74,61 @@ jobs:
           git clone --depth=1 --branch ${{ env.git_tag }} \
             https://chromium.googlesource.com/chromiumos/third_party/kernel kernel
 
-      - name: Integrate KernelSU into kernel tree
+      - name: Integrate KernelSU into kernel tree (fix Kconfig path)
         working-directory: kernel
         run: |
-          echo "[+] Integrating KernelSU into drivers/"
+          echo "[+] Integrating KernelSU with correct Kconfig path"
+          # 确保符号链接正确（避免相对路径问题）
+          rm -rf drivers/kernelsu  # 清除可能的旧链接
           ln -sf $GITHUB_WORKSPACE/KernelSU/kernel drivers/kernelsu
-          DRIVER_MAKEFILE=drivers/Makefile
+          
+          # 验证Kernelsu目录是否存在
+          if [ ! -d "drivers/kernelsu" ]; then
+            echo "Error: drivers/kernelsu directory not found!"
+            exit 1
+          fi
+          # 验证Kconfig文件是否存在
+          if [ ! -f "drivers/kernelsu/Kconfig" ]; then
+            echo "Error: drivers/kernelsu/Kconfig not found!"
+            exit 1
+          fi
+          
+          # 修复Kconfig集成（使用绝对路径确保被识别）
           DRIVER_KCONFIG=drivers/Kconfig
-          grep -q "kernelsu" "$DRIVER_MAKEFILE" || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_MAKEFILE"
-          grep -q "kernelsu" "$DRIVER_KCONFIG" || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' "$DRIVER_KCONFIG"
-          # 确保Kconfig默认值为模块且无依赖冲突
-          sed -i 's/bool "KernelSU support"/tristate "KernelSU support"/' drivers/kernelsu/Kconfig
-          sed -i 's/default m/default m\n\tdepends on MODULES/' drivers/kernelsu/Kconfig  # 强制依赖模块支持
-          sed -i 's/-dirty//g' scripts/setlocalversion
+          # 先删除可能存在的旧条目（避免重复）
+          sed -i '/source "drivers\/kernelsu\/Kconfig"/d' $DRIVER_KCONFIG
+          # 在Kconfig末尾添加（确保在menu外被正确解析）
+          echo 'source "drivers/kernelsu/Kconfig"' >> $DRIVER_KCONFIG
+          # 验证Kconfig是否添加成功
+          grep "source \"drivers/kernelsu/Kconfig\"" $DRIVER_KCONFIG || { echo "Error: Failed to add Kconfig entry!"; exit 1; }
+          
+          # 修复Kconfig内容（确保语法正确）
+          KSU_KCONFIG=drivers/kernelsu/Kconfig
+          # 确保是tristate类型且无语法错误
+          sed -i 's/^config KSU.*/config KSU\n\ttristate "KernelSU support"\n\tdefault m\n\tdepends on MODULES/' $KSU_KCONFIG
+          # 验证Kconfig内容
+          echo "[+] KSU Kconfig content:"
+          cat $KSU_KCONFIG
+          
+          # 修复Makefile集成
+          DRIVER_MAKEFILE=drivers/Makefile
+          sed -i '/obj-$(CONFIG_KSU) += kernelsu\//d' $DRIVER_MAKEFILE
+          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> $DRIVER_MAKEFILE
+          grep "obj-$(CONFIG_KSU) += kernelsu/" $DRIVER_MAKEFILE || { echo "Error: Failed to add Makefile entry!"; exit 1; }
 
-      - name: Patch defconfig to include KSU (with verification)
+      - name: Patch defconfig to include KSU (force)
         working-directory: kernel
         run: |
-          # 明确defconfig路径（避免路径错误）
           DEFCONFIG_PATH="arch/x86/configs/x86_64_defconfig"
-          # 备份并强制写入CONFIG_KSU=m
           cp $DEFCONFIG_PATH ${DEFCONFIG_PATH}.bak
-          # 先删除可能存在的旧配置（防止重复）
+          # 强制写入KSU和依赖
           sed -i '/CONFIG_KSU=/d' $DEFCONFIG_PATH
-          echo "CONFIG_KSU=m" >> $DEFCONFIG_PATH
-          # 强制开启模块支持（KSU依赖MODULES）
           sed -i '/CONFIG_MODULES=/d' $DEFCONFIG_PATH
           echo "CONFIG_MODULES=y" >> $DEFCONFIG_PATH
-          # 验证defconfig修改结果（输出关键内容确认）
-          echo "[+] Modified defconfig content:"
+          echo "CONFIG_KSU=m" >> $DEFCONFIG_PATH
+          # 验证defconfig
+          echo "[+] Defconfig KSU entries:"
           grep -E "CONFIG_KSU|CONFIG_MODULES" $DEFCONFIG_PATH
-          # 检查是否写入成功
-          grep "CONFIG_KSU=m" $DEFCONFIG_PATH || { echo "Error: Failed to write CONFIG_KSU to defconfig!"; exit 1; }
-          grep "CONFIG_MODULES=y" $DEFCONFIG_PATH || { echo "Error: Failed to enable CONFIG_MODULES!"; exit 1; }
 
       - name: Extract kernel version
         working-directory: kernel
@@ -119,40 +141,44 @@ jobs:
           KSU_VERSION=$(($(git rev-list --count HEAD) + 10200))
           echo "kernelsu_version=$KSU_VERSION" >> $GITHUB_ENV
 
-      - name: Configure 6.6 kernel for modules (with forced KSU)
+      - name: Configure kernel (verify Kconfig recognition)
         working-directory: kernel
         run: |
           export DEFCONFIG=x86_64_defconfig
-          DEFCONFIG_PATH="arch/x86/configs/$DEFCONFIG"
-          # 清理旧配置
           make LLVM=1 LLVM_IAS=1 O=${PWD} mrproper
-          # 生成初始配置（使用修改后的defconfig）
+          
+          # 生成配置前先检查Kconfig是否识别CONFIG_KSU
+          echo "[+] Checking if Kconfig recognizes CONFIG_KSU..."
+          if ! scripts/config --list | grep -q "CONFIG_KSU"; then
+            echo "Error: Kconfig does NOT recognize CONFIG_KSU! Check Kconfig integration."
+            # 输出所有已知配置项（调试用）
+            echo "[+] All known config options (partial):"
+            scripts/config --list | head -n 50
+            exit 1
+          fi
+          
+          # 生成配置
           make LLVM=1 LLVM_IAS=1 O=${PWD} $DEFCONFIG < /dev/null
-          # 验证初始.config中是否有KSU（调试用）
-          echo "[+] .config after make defconfig:"
-          grep -E "CONFIG_KSU|CONFIG_MODULES" .config || echo "KSU not found in initial .config"
-          # 补充配置并强制设置KSU（防止olddefconfig覆盖）
-          scripts/config --file .config -e MODULES -e MODULE_UNLOAD -d MODULE_SIG -d MODULE_SIG_ALL -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN
-          scripts/config --file .config --set-val KSU m  # 强制再次设置KSU
-          # 应用配置（使用yes自动确认，但捕获输出）
-          yes "" | make O=${PWD} olddefconfig || true
-          # 最终验证（必须存在CONFIG_KSU=m）
-          echo "[+] Final .config check:"
+          
+          # 强制设置（最后保障）
+          scripts/config --file .config --set-val KSU m
+          scripts/config --file .config -e MODULES -e MODULE_UNLOAD -d MODULE_SIG
+          
+          # 应用配置（不自动确认，避免覆盖）
+          make O=${PWD} olddefconfig < <(echo -e "n\nn")  # 拒绝可能的默认修改
+          
+          # 最终验证
+          echo "[+] Final .config KSU check:"
           grep -E "CONFIG_KSU|CONFIG_MODULES" .config
-          grep "^CONFIG_KSU=m" .config || { echo "Error: CONFIG_KSU not set in .config!"; exit 1; }
+          grep "^CONFIG_KSU=m" .config || { echo "Error: CONFIG_KSU still not set!"; exit 1; }
 
-      - name: Build 6.6 kernel and LKM
+      - name: Build kernel and LKM
         working-directory: kernel
         run: |
-          echo "=== Compiling kernel core ==="
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux
-          echo "=== Compiling modules ==="
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules
-          echo "=== Compiling bzImage ==="
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
-          echo "=== Installing modules ==="
+          make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux
+          make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules
           mkdir -p ./modules
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} INSTALL_MOD_PATH=./modules modules_install
+          make LLVM=1 LLVM_IAS=1 O=${PWD} INSTALL_MOD_PATH=./modules modules_install
           echo "ko_path=${PWD}/drivers/kernelsu/kernelsu.ko" >> $GITHUB_ENV
 
       - name: Verify LKM
