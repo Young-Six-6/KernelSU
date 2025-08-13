@@ -131,15 +131,8 @@ jobs:
           export DEFCONFIG=x86_64_defconfig
           make LLVM=1 LLVM_IAS=1 O=${PWD} mrproper
           make LLVM=1 LLVM_IAS=1 O=${PWD} ${DEFCONFIG} < /dev/null
-          scripts/config --file .config \
-            -e MODULES \
-            -e MODULE_UNLOAD \
-            -e KSU \
-            -d MODULE_SIG \
-            -d MODULE_SIG_ALL \
-            -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN \
-            # 6.6 内核默认支持 LRU_GEN，确保启用该特性
-            -e CONFIG_LRU_GEN
+          # 所有参数合并到一行，避免换行解析错误
+          scripts/config --file .config -e MODULES -e MODULE_UNLOAD -e KSU -d MODULE_SIG -d MODULE_SIG_ALL -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN -e CONFIG_LRU_GEN
 
       - name: Build 6.6 kernel and LKM
         working-directory: kernel
