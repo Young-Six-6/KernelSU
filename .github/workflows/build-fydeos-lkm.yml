@@ -77,12 +77,9 @@ jobs:
       - name: Fix Kconfig syntax and integrate KernelSU
         working-directory: kernel
         run: |
-          echo "[+] Fixing Kconfig syntax and integrating KernelSU"
-          # 确保符号链接正确
           rm -rf drivers/kernelsu
           ln -sf $GITHUB_WORKSPACE/KernelSU/kernel drivers/kernelsu
           
-          # 验证Kernelsu目录和Kconfig存在
           if [ ! -d "drivers/kernelsu" ]; then
             echo "Error: drivers/kernelsu directory missing!"
             exit 1
@@ -93,10 +90,6 @@ jobs:
             exit 1
           fi
           
-          # 修复Kconfig语法错误（关键步骤）
-          # 1. 移除多余的endmenu（无对应menu）
-          # 2. 确保子选项正确缩进（依赖于父选项KSU）
-          # 3. 标准化配置结构
           cat > "$KSU_KCONFIG" <<'EOF'
 config KSU
 	tristate "KernelSU support"
@@ -114,11 +107,7 @@ config KSU_DEBUG
 	help
 	  Enable KernelSU debug mode.
 EOF
-          # 验证Kconfig内容
-          echo "[+] Fixed Kconfig content:"
-          cat "$KSU_KCONFIG"
           
-          # 修复drivers/Kconfig集成（正确添加source语句）
           DRIVER_KCONFIG=drivers/Kconfig
           sed -i '/source "drivers\/kernelsu\/Kconfig"/d' "$DRIVER_KCONFIG"
           echo 'source "drivers/kernelsu/Kconfig"' >> "$DRIVER_KCONFIG"
@@ -127,12 +116,9 @@ EOF
             exit 1
           fi
           
-          # 修复drivers/Makefile集成（正确引用CONFIG_KSU，避免命令执行错误）
           DRIVER_MAKEFILE=drivers/Makefile
-          # 使用单引号包裹，避免$被解析为变量
           sed -i '/obj-$(CONFIG_KSU) += kernelsu\//d' "$DRIVER_MAKEFILE"
           echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_MAKEFILE"
-          # 检查Makefile条目是否添加成功（使用单引号确保字符串匹配）
           if ! grep -q 'obj-$(CONFIG_KSU) += kernelsu/' "$DRIVER_MAKEFILE"; then
             echo "Error: Failed to add Makefile entry!"
             exit 1
@@ -166,9 +152,8 @@ EOF
           export DEFCONFIG=x86_64_defconfig
           make LLVM=1 LLVM_IAS=1 O=${PWD} mrproper
           
-          # 检查Kconfig是否识别CONFIG_KSU
           if ! scripts/config --list | grep -q "CONFIG_KSU"; then
-            echo "Error: Kconfig still does not recognize CONFIG_KSU!"
+            echo "Error: Kconfig does not recognize CONFIG_KSU!"
             exit 1
           fi
           
@@ -201,3 +186,4 @@ EOF
           name: kernelsu-ko-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
           path: ${{ env.ko_path }}
           retention-days: 14
+    
