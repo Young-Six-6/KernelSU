@@ -1,66 +1,158 @@
-name: Build Kernel with KernelSU
- 
+name: Build FydeOS KernelSU LKM (x86_64) with 6.6 Kernel
+
 on:
+  push:
+    branches: ["main", "ci", "dev"]
+    paths:
+      - ".github/workflows/build-fydeos-lkm.yml"
+      - "kernel/**"
+      - "drivers/kernelsu/**"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/build-fydeos-lkm.yml"
+      - "kernel/**"
+      - "drivers/kernelsu/**"
   workflow_dispatch:
+    inputs:
+      debug:
+        description: "Enable debug mode"
+        type: boolean
+        default: false
+
+env:
+  git_tag: chromeos-6.6
 
 jobs:
-  build:
+  build-lkm:
+    if: |
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'push') ||
+      (github.event_name == 'pull_request' && !github.event.pull_request.draft)
+    name: Build FydeOS x86_64 KernelSU LKM (6.6 Kernel)
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+
+    env:
+      LTO: thin
+      KERNEL_DIR: ${{ github.workspace }}/kernel
+
     steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android 2>/dev/null
+          df -h
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates flex git gnupg \
+            libelf-dev libssl-dev lsb-release software-properties-common wget \
+            libncurses-dev binutils-x86-64-linux-gnu gcc-x86-64-linux-gnu \
+            rsync python3 device-tree-compiler kmod
+          sudo ln -sf python3 /usr/bin/python
+          export LLVM_VERSION=16
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh $LLVM_VERSION
+          rm ./llvm.sh
+          for tool in clang ld.lld llvm-objdump llvm-ar llvm-nm llvm-strip llvm-objcopy llvm-readelf clang++; do
+            sudo ln -sf /usr/bin/$tool-$LLVM_VERSION /usr/bin/$tool
+          done
+
       - name: Checkout KernelSU
         uses: actions/checkout@v4
         with:
-          repository: KernelSU/KernelSU
-          path: kernelsu
+          path: KernelSU
+          fetch-depth: 0
 
-      - name: Clone Kernel source
+      - name: Setup 6.6 kernel source
         run: |
-          git clone --depth=1 -b chromeos-6.6 https://chromium.googlesource.com/chromiumos/third_party/kernel kernel
+          git clone --depth=1 --branch ${{ env.git_tag }} \
+            https://chromium.googlesource.com/chromiumos/third_party/kernel kernel
 
-      - name: Inject KernelSU into kernel tree
+      - name: Integrate KernelSU into kernel tree
+        working-directory: kernel
         run: |
-          cd kernel
-          # 挂载 KernelSU 到 drivers/kernelsu
-          ln -sf ../../kernelsu drivers/kernelsu
+          echo "[+] Integrating KernelSU into drivers/"
+          ln -sf $GITHUB_WORKSPACE/KernelSU/kernel drivers/kernelsu
+          DRIVER_MAKEFILE=drivers/Makefile
+          DRIVER_KCONFIG=drivers/Kconfig
+          grep -q "kernelsu" "$DRIVER_MAKEFILE" || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_MAKEFILE"
+          grep -q "kernelsu" "$DRIVER_KCONFIG" || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' "$DRIVER_KCONFIG"
+          # 确保Kconfig默认值为模块
+          sed -i 's/bool "KernelSU support"/tristate "KernelSU support"/' drivers/kernelsu/Kconfig
+          sed -i 's/default y/default m/' drivers/kernelsu/Kconfig
+          sed -i 's/-dirty//g' scripts/setlocalversion
 
-          # 修改 drivers/Makefile
-          grep -q 'kernelsu' drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-
-          # 修改 drivers/Kconfig
-          grep -q 'kernelsu/Kconfig' drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-
-          # 在 arch/x86/configs/x86_64_defconfig 里加 CONFIG_KSU
-          DEFCONF=arch/x86/configs/x86_64_defconfig
-          grep -q 'CONFIG_KSU' $DEFCONF || echo 'CONFIG_KSU=m' >> $DEFCONF
-
-          echo "==== [DEBUG] defconfig 内容 ===="
-          cat $DEFCONF
-
-      - name: Build kernel with LLVM
+      - name: Patch defconfig to include KSU
+        working-directory: kernel
         run: |
-          cd kernel
+          # 备份原始defconfig
+          cp arch/x86/configs/x86_64_defconfig arch/x86/configs/x86_64_defconfig.bak
+          # 强行写入CONFIG_KSU=m到默认配置
+          if ! grep -q "CONFIG_KSU=m" arch/x86/configs/x86_64_defconfig; then
+            echo "CONFIG_KSU=m" >> arch/x86/configs/x86_64_defconfig
+            echo "[+] Added CONFIG_KSU=m to x86_64_defconfig"
+          else
+            echo "[+] x86_64_defconfig already contains CONFIG_KSU=m"
+          fi
+          # 验证写入结果
+          grep "CONFIG_KSU=m" arch/x86/configs/x86_64_defconfig || { echo "Error: Failed to patch defconfig!"; exit 1; }
+
+      - name: Extract kernel version
+        working-directory: kernel
+        run: |
+          VERSION=$(grep -E '^VERSION = ' Makefile | awk '{print $3}')
+          PATCHLEVEL=$(grep -E '^PATCHLEVEL = ' Makefile | awk '{print $3}')
+          SUBLEVEL=$(grep -E '^SUBLEVEL = ' Makefile | awk '{print $3}')
+          echo "version=$VERSION.$PATCHLEVEL.$SUBLEVEL" >> $GITHUB_ENV
+          cd $GITHUB_WORKSPACE/KernelSU
+          KSU_VERSION=$(($(git rev-list --count HEAD) + 10200))
+          echo "kernelsu_version=$KSU_VERSION" >> $GITHUB_ENV
+
+      - name: Configure 6.6 kernel for modules
+        working-directory: kernel
+        run: |
           export DEFCONFIG=x86_64_defconfig
-          echo "==== [DEBUG] 清理环境 ===="
+          # 使用修改后的defconfig生成配置
           make LLVM=1 LLVM_IAS=1 O=${PWD} mrproper
-
-          echo "==== [DEBUG] 生成 defconfig ===="
           make LLVM=1 LLVM_IAS=1 O=${PWD} ${DEFCONFIG} < /dev/null
-          echo "==== [DEBUG] 生成后的 .config（defconfig 阶段） ===="
-          grep KSU .config || echo "KSU not found yet"
-
-          echo "==== [DEBUG] 调整配置 ===="
-          scripts/config --file .config \
-            -e MODULES \
-            -e MODULE_UNLOAD \
-            -m KSU \
-            -d MODULE_SIG \
-            -d MODULE_SIG_ALL \
-            -e LTO_CLANG \
-            -d LTO_NONE \
-            -e LTO_CLANG_THIN
-
-          echo "==== [DEBUG] 运行 olddefconfig ===="
+          # 补充其他必要配置
+          scripts/config --file .config -e MODULES -e MODULE_UNLOAD -d MODULE_SIG -d MODULE_SIG_ALL -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN
+          # 应用配置
           yes "" | make O=${PWD} olddefconfig
+          # 最终验证CONFIG_KSU是否生效
+          grep "^CONFIG_KSU=m" .config || { echo "Error: CONFIG_KSU not set in .config!"; exit 1; }
 
-          echo "==== [DEBUG] 最终 .config 检查 ===="
-          grep KSU .config || { echo "CONFIG_KSU not set!"; exit 1; }
+      - name: Build 6.6 kernel and LKM
+        working-directory: kernel
+        run: |
+          echo "=== Compiling kernel core ==="
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux
+          echo "=== Compiling modules ==="
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules
+          echo "=== Compiling bzImage ==="
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
+          echo "=== Installing modules ==="
+          mkdir -p ./modules
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} INSTALL_MOD_PATH=./modules modules_install
+          echo "ko_path=${PWD}/drivers/kernelsu/kernelsu.ko" >> $GITHUB_ENV
+
+      - name: Verify LKM
+        run: |
+          if [ ! -f "${{ env.ko_path }}" ]; then
+            echo "Error: kernelsu.ko not found!"
+            exit 1
+          fi
+          modinfo ${{ env.ko_path }}
+
+      - name: Upload kernelsu.ko
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernelsu-ko-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
+          path: ${{ env.ko_path }}
+          retention-days: 14
