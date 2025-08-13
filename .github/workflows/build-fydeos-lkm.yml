@@ -20,7 +20,6 @@ on:
         default: false
 
 env:
-  # 切换为 6.6 版本的 ChromeOS 内核分支（根据实际分支名调整）
   git_tag: chromeos-6.6
 
 jobs:
@@ -56,7 +55,6 @@ jobs:
 
           sudo ln -s --force python3 /usr/bin/python
 
-          # 6.6 内核推荐使用 LLVM 16+（兼容性更好）
           export LLVM_VERSION=16
           for i in {1..3}; do
             if wget --timeout=30 https://apt.llvm.org/llvm.sh; then
@@ -90,7 +88,6 @@ jobs:
 
       - name: Setup 6.6 kernel source
         run: |
-          # 克隆 6.6 版本的 ChromeOS 内核（分支名可能需要微调）
           git clone --depth=1 --branch ${{ env.git_tag }} \
             https://chromium.googlesource.com/chromiumos/third_party/kernel \
             || { echo "Clone failed, retrying..."; git clone --depth=1 --branch ${{ env.git_tag }} https://chromium.googlesource.com/chromiumos/third_party/kernel; }
@@ -141,37 +138,31 @@ jobs:
             -d MODULE_SIG \
             -d MODULE_SIG_ALL \
             -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN \
-            # 6.6 内核默认支持 LRU_GEN，无需额外禁用
-            -e CONFIG_LRU_GEN # 确保启用该特性（解决之前的符号问题）
+            # 6.6 内核默认支持 LRU_GEN，确保启用该特性
+            -e CONFIG_LRU_GEN
 
       - name: Build 6.6 kernel and LKM
         working-directory: kernel
         run: |
-          # 优先编译内核核心生成符号文件
           echo "=== Compiling 6.6 kernel core (vmlinux) ==="
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux
           
-          # 编译模块
           echo "=== Compiling modules ==="
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules
           
-          # 检查关键文件
           if [ ! -f "vmlinux.symvers" ] || [ ! -f "modules.order" ] || [ ! -f "modules.builtin" ]; then
             echo "Error: Missing critical compilation files!"
             exit 1
           fi
           
-          # 编译内核镜像
           echo "=== Compiling bzImage ==="
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
           
-          # 安装模块
           echo "=== Installing modules ==="
           mkdir -p ./modules
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) \
             INSTALL_MOD_PATH=./modules modules_install
           
-          # 确认 KernelSU 模块路径
           echo "ko_path=${PWD}/drivers/kernelsu/kernelsu.ko" >> $GITHUB_ENV
 
       - name: Verify LKM
