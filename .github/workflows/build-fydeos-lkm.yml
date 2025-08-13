@@ -53,32 +53,14 @@ jobs:
             libelf-dev libssl-dev lsb-release software-properties-common wget \
             libncurses-dev binutils-x86-64-linux-gnu gcc-x86-64-linux-gnu \
             rsync python3 device-tree-compiler kmod
-
-          sudo ln -s --force python3 /usr/bin/python
-
+          sudo ln -sf python3 /usr/bin/python
           export LLVM_VERSION=16
-          for i in {1..3}; do
-            if wget --timeout=30 https://apt.llvm.org/llvm.sh; then
-              echo "Successfully downloaded llvm.sh from main source"
-              break
-            else
-              echo "Attempt $i failed, trying backup source..."
-              if wget --timeout=30 https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/utils/release/llvm.sh; then
-                echo "Successfully downloaded llvm.sh from backup source"
-                break
-              fi
-            fi
-            if [ $i -eq 3 ]; then
-              echo "Error: Failed to download llvm.sh after 3 attempts"
-              exit 1
-            fi
-          done
-
+          wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh $LLVM_VERSION
           rm ./llvm.sh
           for tool in cl ld.lld llvm-objdump llvm-ar llvm-nm llvm-strip llvm-objcopy llvm-readelf clang++; do
-            sudo ln -s --force /usr/bin/$tool-$LLVM_VERSION /usr/bin/$tool
+            sudo ln -sf /usr/bin/$tool-$LLVM_VERSION /usr/bin/$tool
           done
 
       - name: Checkout KernelSU
@@ -90,8 +72,20 @@ jobs:
       - name: Setup 6.6 kernel source
         run: |
           git clone --depth=1 --branch ${{ env.git_tag }} \
-            https://chromium.googlesource.com/chromiumos/third_party/kernel \
-            || { echo "Clone failed, retrying..."; git clone --depth=1 --branch ${{ env.git_tag }} https://chromium.googlesource.com/chromiumos/third_party/kernel; }
+            https://chromium.googlesource.com/chromiumos/third_party/kernel kernel
+
+      - name: Integrate KernelSU into kernel tree
+        working-directory: kernel
+        run: |
+          echo "[+] Integrating KernelSU into drivers/"
+          ln -sf $GITHUB_WORKSPACE/KernelSU/kernel drivers/kernelsu
+          DRIVER_MAKEFILE=drivers/Makefile
+          DRIVER_KCONFIG=drivers/Kconfig
+          grep -q "kernelsu" "$DRIVER_MAKEFILE" || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_MAKEFILE"
+          grep -q "kernelsu" "$DRIVER_KCONFIG" || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' "$DRIVER_KCONFIG"
+          sed -i 's/bool "KernelSU support"/tristate "KernelSU support"/' drivers/kernelsu/Kconfig
+          sed -i 's/default y/default m/' drivers/kernelsu/Kconfig
+          sed -i 's/-dirty//g' scripts/setlocalversion
 
       - name: Extract kernel version
         working-directory: kernel
@@ -99,34 +93,9 @@ jobs:
           VERSION=$(grep -E '^VERSION = ' Makefile | awk '{print $3}')
           PATCHLEVEL=$(grep -E '^PATCHLEVEL = ' Makefile | awk '{print $3}')
           SUBLEVEL=$(grep -E '^SUBLEVEL = ' Makefile | awk '{print $3}')
-          echo "Kernel version: $VERSION.$PATCHLEVEL.$SUBLEVEL"
           echo "version=$VERSION.$PATCHLEVEL.$SUBLEVEL" >> $GITHUB_ENV
-
-      - name: Setup KernelSU (as module)
-        working-directory: kernel
-        run: |
-          KERNEL_ROOT=$GITHUB_WORKSPACE/kernel
-          echo "[+] Kernel root: $KERNEL_ROOT"
-
-          # 链接 KernelSU 源码
-          ln -sf $GITHUB_WORKSPACE/KernelSU/kernel $KERNEL_ROOT/drivers/kernelsu
-
-          # 添加 Makefile / Kconfig
-          DRIVER_MAKEFILE=$KERNEL_ROOT/drivers/Makefile
-          DRIVER_KCONFIG=$KERNEL_ROOT/drivers/Kconfig
-          grep -q "kernelsu" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "$DRIVER_MAKEFILE"
-          grep -q "kernelsu" "$DRIVER_KCONFIG" || sed -i "/endmenu/i\\source \"drivers/kernelsu/Kconfig\"" "$DRIVER_KCONFIG"
-
-          # 强制 KSU 作为模块
-          sed -i '/config KSU/,/help/{s/default y/default m/}' $KERNEL_ROOT/drivers/kernelsu/Kconfig
-
-          # 设置内核版本号
-          sed -i 's/-dirty//g' $KERNEL_ROOT/scripts/setlocalversion
-
-          # 记录 KernelSU 版本
           cd $GITHUB_WORKSPACE/KernelSU
           KSU_VERSION=$(($(git rev-list --count HEAD) + 10200))
-          echo "KernelSU version: $KSU_VERSION"
           echo "kernelsu_version=$KSU_VERSION" >> $GITHUB_ENV
 
       - name: Configure 6.6 kernel for modules
@@ -142,28 +111,16 @@ jobs:
       - name: Build 6.6 kernel and LKM
         working-directory: kernel
         run: |
-          echo "=== Compiling 6.6 kernel core (vmlinux) ==="
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux || exit 1
-          
+          echo "=== Compiling kernel core ==="
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux
           echo "=== Compiling modules ==="
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules || exit 1
-          
-          echo "=== Searching for kernelsu.ko ==="
-          ko_file=$(find ${PWD} -name "kernelsu.ko" | head -n 1 || true)
-          if [ -z "$ko_file" ]; then
-            echo "Error: kernelsu.ko not found after build!"
-            exit 1
-          fi
-          echo "ko_path=$ko_file" >> $GITHUB_ENV
-          echo "Found: $ko_file"
-          
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules
           echo "=== Compiling bzImage ==="
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage || exit 1
-          
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
           echo "=== Installing modules ==="
           mkdir -p ./modules
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) \
-            INSTALL_MOD_PATH=./modules modules_install || exit 1
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} INSTALL_MOD_PATH=./modules modules_install
+          echo "ko_path=${PWD}/drivers/kernelsu/kernelsu.ko" >> $GITHUB_ENV
 
       - name: Verify LKM
         run: |
@@ -173,7 +130,7 @@ jobs:
           fi
           modinfo ${{ env.ko_path }}
 
-      - name: Upload kernelsu.ko (6.6 Kernel)
+      - name: Upload kernelsu.ko
         uses: actions/upload-artifact@v4
         with:
           name: kernelsu-ko-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
