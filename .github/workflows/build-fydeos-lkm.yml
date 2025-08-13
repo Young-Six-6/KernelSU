@@ -126,14 +126,31 @@ jobs:
       - name: Build kernel and LKM
         working-directory: kernel
         run: |
-          # 关键修复：创建本地模块安装目录，避免权限问题
-          mkdir -p ./modules  # 在当前内核目录下创建modules子目录
-          # 编译时指定模块安装路径为./modules（非系统目录）
+          # 第一步：单独编译模块，确保生成 modules.order
+          echo "=== Compiling kernel modules ==="
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules
+          
+          # 检查模块编译产物是否存在
+          if [ ! -f "modules.order" ]; then
+            echo "Error: modules.order not found! Module compilation failed."
+            exit 1
+          fi
+          if [ ! -f "modules.builtin" ]; then
+            echo "Error: modules.builtin not found! Module compilation failed."
+            exit 1
+          fi
+          
+          # 第二步：编译内核镜像
+          echo "=== Compiling kernel image ==="
+          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
+          
+          # 第三步：安装模块到本地目录（使用已生成的 modules.order）
+          echo "=== Installing modules to local directory ==="
+          mkdir -p ./modules
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) \
-            bzImage \
-            modules \
-            INSTALL_MOD_PATH=./modules modules_install  # 指定安装路径
-          # 确认ko文件路径（编译生成在drivers/kernelsu/下）
+            INSTALL_MOD_PATH=./modules modules_install
+          
+          # 确认 KernelSU 模块路径
           echo "ko_path=${PWD}/drivers/kernelsu/kernelsu.ko" >> $GITHUB_ENV
 
       - name: Verify LKM
