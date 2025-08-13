@@ -90,7 +90,7 @@ jobs:
             exit 1
           fi
           
-          # 修复第94行：使用正确的heredoc格式，确保EOF单独成行且无缩进
+          # 修复YAML语法：确保heredoc内容缩进与外层一致
           cat > "$KSU_KCONFIG" <<'EOF'
 config KSU
 	tristate "KernelSU support"
