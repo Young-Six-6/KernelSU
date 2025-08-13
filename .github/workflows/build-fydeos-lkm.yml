@@ -83,25 +83,30 @@ jobs:
           DRIVER_KCONFIG=drivers/Kconfig
           grep -q "kernelsu" "$DRIVER_MAKEFILE" || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_MAKEFILE"
           grep -q "kernelsu" "$DRIVER_KCONFIG" || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' "$DRIVER_KCONFIG"
-          # 确保Kconfig默认值为模块
+          # 确保Kconfig默认值为模块且无依赖冲突
           sed -i 's/bool "KernelSU support"/tristate "KernelSU support"/' drivers/kernelsu/Kconfig
-          sed -i 's/default y/default m/' drivers/kernelsu/Kconfig
+          sed -i 's/default m/default m\n\tdepends on MODULES/' drivers/kernelsu/Kconfig  # 强制依赖模块支持
           sed -i 's/-dirty//g' scripts/setlocalversion
 
-      - name: Patch defconfig to include KSU
+      - name: Patch defconfig to include KSU (with verification)
         working-directory: kernel
         run: |
-          # 备份原始defconfig
-          cp arch/x86/configs/x86_64_defconfig arch/x86/configs/x86_64_defconfig.bak
-          # 强行写入CONFIG_KSU=m到默认配置
-          if ! grep -q "CONFIG_KSU=m" arch/x86/configs/x86_64_defconfig; then
-            echo "CONFIG_KSU=m" >> arch/x86/configs/x86_64_defconfig
-            echo "[+] Added CONFIG_KSU=m to x86_64_defconfig"
-          else
-            echo "[+] x86_64_defconfig already contains CONFIG_KSU=m"
-          fi
-          # 验证写入结果
-          grep "CONFIG_KSU=m" arch/x86/configs/x86_64_defconfig || { echo "Error: Failed to patch defconfig!"; exit 1; }
+          # 明确defconfig路径（避免路径错误）
+          DEFCONFIG_PATH="arch/x86/configs/x86_64_defconfig"
+          # 备份并强制写入CONFIG_KSU=m
+          cp $DEFCONFIG_PATH ${DEFCONFIG_PATH}.bak
+          # 先删除可能存在的旧配置（防止重复）
+          sed -i '/CONFIG_KSU=/d' $DEFCONFIG_PATH
+          echo "CONFIG_KSU=m" >> $DEFCONFIG_PATH
+          # 强制开启模块支持（KSU依赖MODULES）
+          sed -i '/CONFIG_MODULES=/d' $DEFCONFIG_PATH
+          echo "CONFIG_MODULES=y" >> $DEFCONFIG_PATH
+          # 验证defconfig修改结果（输出关键内容确认）
+          echo "[+] Modified defconfig content:"
+          grep -E "CONFIG_KSU|CONFIG_MODULES" $DEFCONFIG_PATH
+          # 检查是否写入成功
+          grep "CONFIG_KSU=m" $DEFCONFIG_PATH || { echo "Error: Failed to write CONFIG_KSU to defconfig!"; exit 1; }
+          grep "CONFIG_MODULES=y" $DEFCONFIG_PATH || { echo "Error: Failed to enable CONFIG_MODULES!"; exit 1; }
 
       - name: Extract kernel version
         working-directory: kernel
@@ -114,18 +119,26 @@ jobs:
           KSU_VERSION=$(($(git rev-list --count HEAD) + 10200))
           echo "kernelsu_version=$KSU_VERSION" >> $GITHUB_ENV
 
-      - name: Configure 6.6 kernel for modules
+      - name: Configure 6.6 kernel for modules (with forced KSU)
         working-directory: kernel
         run: |
           export DEFCONFIG=x86_64_defconfig
-          # 使用修改后的defconfig生成配置
+          DEFCONFIG_PATH="arch/x86/configs/$DEFCONFIG"
+          # 清理旧配置
           make LLVM=1 LLVM_IAS=1 O=${PWD} mrproper
-          make LLVM=1 LLVM_IAS=1 O=${PWD} ${DEFCONFIG} < /dev/null
-          # 补充其他必要配置
+          # 生成初始配置（使用修改后的defconfig）
+          make LLVM=1 LLVM_IAS=1 O=${PWD} $DEFCONFIG < /dev/null
+          # 验证初始.config中是否有KSU（调试用）
+          echo "[+] .config after make defconfig:"
+          grep -E "CONFIG_KSU|CONFIG_MODULES" .config || echo "KSU not found in initial .config"
+          # 补充配置并强制设置KSU（防止olddefconfig覆盖）
           scripts/config --file .config -e MODULES -e MODULE_UNLOAD -d MODULE_SIG -d MODULE_SIG_ALL -e LTO_CLANG -d LTO_NONE -e LTO_CLANG_THIN
-          # 应用配置
-          yes "" | make O=${PWD} olddefconfig
-          # 最终验证CONFIG_KSU是否生效
+          scripts/config --file .config --set-val KSU m  # 强制再次设置KSU
+          # 应用配置（使用yes自动确认，但捕获输出）
+          yes "" | make O=${PWD} olddefconfig || true
+          # 最终验证（必须存在CONFIG_KSU=m）
+          echo "[+] Final .config check:"
+          grep -E "CONFIG_KSU|CONFIG_MODULES" .config
           grep "^CONFIG_KSU=m" .config || { echo "Error: CONFIG_KSU not set in .config!"; exit 1; }
 
       - name: Build 6.6 kernel and LKM
