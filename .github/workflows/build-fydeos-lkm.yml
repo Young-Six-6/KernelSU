@@ -29,8 +29,7 @@ jobs:
       (github.event_name == 'push') ||
       (github.event_name == 'pull_request' && !github.event.pull_request.draft)
     name: Build FydeOS x86_64 KernelSU LKM
-    runs-on: ubuntu-22.04  # 更换为资源更充足的22.04
-    # 修正：删除错误的artifacts权限，保留必要的合法权限
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
       actions: read
@@ -127,8 +126,14 @@ jobs:
       - name: Build kernel and LKM
         working-directory: kernel
         run: |
+          # 关键修复：创建本地模块安装目录，避免权限问题
+          mkdir -p ./modules  # 在当前内核目录下创建modules子目录
+          # 编译时指定模块安装路径为./modules（非系统目录）
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) \
-            bzImage modules modules_install
+            bzImage \
+            modules \
+            INSTALL_MOD_PATH=./modules modules_install  # 指定安装路径
+          # 确认ko文件路径（编译生成在drivers/kernelsu/下）
           echo "ko_path=${PWD}/drivers/kernelsu/kernelsu.ko" >> $GITHUB_ENV
 
       - name: Verify LKM
