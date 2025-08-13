@@ -1,19 +1,17 @@
 name: Build FydeOS KernelSU LKM (x86_64)
 on:
-  # 保留原有触发条件，扩大路径范围避免漏触发
   push:
-    branches: ["main", "ci", "dev"]  # 增加常用开发分支
+    branches: ["main", "ci", "dev"]
     paths:
       - ".github/workflows/build-fydeos-lkm.yml"
       - "kernel/**"
-      - "drivers/kernelsu/**"  # 增加KernelSU核心目录监控
+      - "drivers/kernelsu/**"
   pull_request:
     branches: ["main"]
     paths:
       - ".github/workflows/build-fydeos-lkm.yml"
       - "kernel/**"
       - "drivers/kernelsu/**"
-  # 优化手动触发配置，支持输入参数（可选）
   workflow_dispatch:
     inputs:
       debug:
@@ -22,27 +20,26 @@ on:
         default: false
 
 env:
-  git_tag: chromeos-5.15  # 保持内核版本一致
+  git_tag: chromeos-5.15
 
 jobs:
   build-lkm:
-    # 简化条件判断，确保手动触发时必执行
     if: |
       (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'push') ||
       (github.event_name == 'pull_request' && !github.event.pull_request.draft)
     name: Build FydeOS x86_64 KernelSU LKM
-    runs-on: ubuntu-22.04  # 更换为更稳定的22.04版本（资源更充足）
-    permissions:  # 显式声明权限，避免默认权限不足
+    runs-on: ubuntu-22.04  # 更换为资源更充足的22.04
+    # 修正：删除错误的artifacts权限，保留必要的合法权限
+    permissions:
       contents: read
       actions: read
-      artifacts: write  # 确保能上传产物
+
     env:
       LTO: thin
       KERNEL_DIR: ${{ github.workspace }}/kernel
 
     steps:
-      # 增加清理步骤，释放磁盘空间（避免 runner 空间不足）
       - name: Free up disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android 2>/dev/null
@@ -59,7 +56,6 @@ jobs:
 
           sudo ln -s --force python3 /usr/bin/python
 
-          # 安装LLVM 14（保持版本一致，增加超时控制）
           export LLVM_VERSION=14
           wget --timeout=30 https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
@@ -73,11 +69,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: KernelSU
-          fetch-depth: 0  # 确保能获取完整历史（计算版本用）
+          fetch-depth: 0
 
       - name: Setup kernel source
         run: |
-          # 克隆内核源码，增加超时和重试机制
           git clone --depth=1 --branch ${{ env.git_tag }} \
             https://chromium.googlesource.com/chromiumos/third_party/kernel \
             || { echo "Clone failed, retrying..."; git clone --depth=1 --branch ${{ env.git_tag }} https://chromium.googlesource.com/chromiumos/third_party/kernel; }
@@ -104,7 +99,6 @@ jobs:
           grep -q "kernelsu" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "$DRIVER_MAKEFILE"
           grep -q "kernelsu" "$DRIVER_KCONFIG" || sed -i "/endmenu/i\\source \"drivers/kernelsu/Kconfig\"" "$DRIVER_KCONFIG"
 
-          # 模块化配置（核心步骤不变）
           KSU_KCONFIG=$KERNEL_ROOT/drivers/kernelsu/Kconfig
           sed -i 's/bool "KernelSU support"/tristate "KernelSU support"/' $KSU_KCONFIG
           sed -i 's/default y/default m/' $KSU_KCONFIG
@@ -133,7 +127,6 @@ jobs:
       - name: Build kernel and LKM
         working-directory: kernel
         run: |
-          # 增加编译超时控制（1小时）
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) \
             bzImage modules modules_install
           echo "ko_path=${PWD}/drivers/kernelsu/kernelsu.ko" >> $GITHUB_ENV
@@ -151,4 +144,4 @@ jobs:
         with:
           name: kernelsu-ko-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
           path: ${{ env.ko_path }}
-          retention-days: 14  # 增加产物保留时间
+          retention-days: 14
