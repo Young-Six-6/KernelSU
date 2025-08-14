@@ -25,11 +25,6 @@ env:
 
 jobs:
   build-lkm:
-    if: |
-      (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'push') ||
-      (github.event_name == 'pull_request' && !github.event.pull_request.draft)
-    name: Build FydeOS x86_64 KernelSU LKM (6.6 Kernel)
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -95,9 +90,6 @@ jobs:
           sed -i 's/default y/default m/' drivers/kernelsu/Kconfig
           sed -i 's/-dirty//g' scripts/setlocalversion
 
-          echo "[DEBUG] KernelSU Kconfig 内容："
-          cat drivers/kernelsu/Kconfig || true
-
       - name: Extract kernel version
         working-directory: kernel
         run: |
@@ -127,6 +119,8 @@ jobs:
             -e LTO_CLANG_THIN
 
           echo "[DEBUG] 第一次检查 .config 中的 CONFIG_KSU"
+          grep CONFIG_KSU .config || true
+
           if ! grep -q "^CONFIG_KSU=m" .config; then
             echo "ERROR: CONFIG_KSU not set before olddefconfig!"
             exit 1
@@ -135,34 +129,52 @@ jobs:
           yes "" | make O="${PWD}" olddefconfig
 
           echo "[DEBUG] 第二次检查 .config 中的 CONFIG_KSU"
+          grep CONFIG_KSU .config || true
+
           if ! grep -q "^CONFIG_KSU=m" .config; then
             echo "WARNING: CONFIG_KSU 被 olddefconfig 关闭，直接写回 .config"
             echo "CONFIG_KSU=m" >> .config
           fi
 
-          grep CONFIG_KSU .config
-
       - name: Build 6.6 kernel and LKM
         working-directory: kernel
         run: |
-          echo "=== Compiling kernel core ==="
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux
-          echo "=== Compiling modules ==="
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules
-          echo "=== Compiling bzImage ==="
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
-          echo "=== Installing modules ==="
           mkdir -p ./modules
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} INSTALL_MOD_PATH=./modules modules_install
-          echo "ko_path=${PWD}/drivers/kernelsu/kernelsu.ko" >> $GITHUB_ENV
 
-      - name: Verify LKM
+      - name: Debug: list built .ko files
+        working-directory: kernel
         run: |
-          if [ ! -f "${{ env.ko_path }}" ]; then
+          echo "[DEBUG] Listing all .ko files..."
+          find . -type f -name "*.ko" || echo "No .ko files found"
+
+      - name: Debug: upload config and KSU build files
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-config-ksu
+          path: |
+            kernel/.config
+            kernel/drivers/kernelsu/Kconfig
+            kernel/drivers/kernelsu/Makefile
+          retention-days: 14
+
+      - name: Find kernelsu.ko path
+        id: findko
+        working-directory: kernel
+        run: |
+          KO=$(find . -type f -name "kernelsu.ko" | head -n 1)
+          if [ -z "$KO" ]; then
             echo "Error: kernelsu.ko not found!"
             exit 1
           fi
-          modinfo ${{ env.ko_path }}
+          echo "ko_path=${KO}" >> $GITHUB_ENV
+
+      - name: Verify LKM
+        run: |
+          modinfo "${{ env.ko_path }}"
 
       - name: Upload kernelsu.ko
         uses: actions/upload-artifact@v4
