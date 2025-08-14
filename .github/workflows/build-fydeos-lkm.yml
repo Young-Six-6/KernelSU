@@ -118,7 +118,7 @@ jobs:
             -d LTO_NONE \
             -e LTO_CLANG_THIN
 
-          echo "[DEBUG] 第一次检查 .config 中的 CONFIG_KSU"
+          echo "[DEBUG] First check for CONFIG_KSU in .config"
           grep CONFIG_KSU .config || true
 
           if ! grep -q "^CONFIG_KSU=m" .config; then
@@ -128,11 +128,11 @@ jobs:
 
           yes "" | make O="${PWD}" olddefconfig
 
-          echo "[DEBUG] 第二次检查 .config 中的 CONFIG_KSU"
+          echo "[DEBUG] Second check for CONFIG_KSU in .config"
           grep CONFIG_KSU .config || true
 
           if ! grep -q "^CONFIG_KSU=m" .config; then
-            echo "WARNING: CONFIG_KSU 被 olddefconfig 关闭，直接写回 .config"
+            echo "WARNING: CONFIG_KSU disabled by olddefconfig, forcing enable..."
             echo "CONFIG_KSU=m" >> .config
           fi
 
