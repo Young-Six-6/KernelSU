@@ -145,13 +145,13 @@ jobs:
           mkdir -p ./modules
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} INSTALL_MOD_PATH=./modules modules_install
 
-      - name: Debug: list built .ko files
+      - name: "Debug: list built .ko files"
         working-directory: kernel
         run: |
           echo "[DEBUG] Listing all .ko files..."
           find . -type f -name "*.ko" || echo "No .ko files found"
 
-      - name: Debug: upload config and KSU build files
+      - name: "Debug: upload config and KSU build files"
         uses: actions/upload-artifact@v4
         with:
           name: debug-config-ksu
