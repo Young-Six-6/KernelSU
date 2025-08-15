@@ -111,6 +111,7 @@ jobs:
 
           scripts/config --file .config \
             -e MODULES \
+            -e OVERLAY_FS \
             -e MODULE_UNLOAD \
             -m KSU \
             -d MODULE_SIG \
