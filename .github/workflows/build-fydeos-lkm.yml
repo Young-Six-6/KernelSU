@@ -144,6 +144,25 @@ jobs:
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
           mkdir -p ./modules
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} INSTALL_MOD_PATH=./modules modules_install
+          # 保存详细构建日志
+          make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux 2>&1 | tee build-vmlinux.log
+          make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules 2>&1 | tee build-modules.log
+    
+          # 单独构建KernelSU模块并捕获详细输出
+          echo "[+] Building KernelSU module specifically with debug"
+          make LLVM=1 LLVM_IAS=1 O=${PWD} M=drivers/kernelsu V=1 2>&1 | tee build-kernelsu.log || true
+    
+          # 上传详细构建日志
+          echo "[DEBUG] Uploading build logs for analysis"
+          ls -lh build-*.log
+
+      - name: Upload build logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-debug-logs
+          path: |
+           kernel/build-*.log
+        retention-days: 14
 
       - name: "Debug: list built .ko files"
         working-directory: kernel
@@ -173,6 +192,27 @@ jobs:
             exit 1
           fi
           echo "ko_path=${KO}" >> $GITHUB_ENV
+# 该步骤需嵌套在 jobs.build-lkm.steps 列表内（建议放在「Configure 6.6 kernel for modules」步骤之后，确保 .config 已生成）
+      - name: Analyze kernel config
+        working-directory: kernel  # 指定工作目录为 kernel 源码根目录
+        run: |
+          echo "===== KERNEL CONFIG ANALYSIS ====="
+          echo "CONFIG_KSU status:"
+          grep "^CONFIG_KSU=" .config || echo "CONFIG_KSU not found!"
+    
+          echo "CONFIG_OVERLAY_FS status:"
+          grep "^CONFIG_OVERLAY_FS=" .config || echo "CONFIG_OVERLAY_FS not found!"
+    
+          echo "MODULE related configs:"
+          grep -E "CONFIG_MODULES|CONFIG_MODULE_UNLOAD" .config
+          
+          echo "LTO related configs:"
+          grep -E "CONFIG_LTO|CONFIG_LTO_CLANG" .config
+    
+          echo "KSU dependencies:"
+          grep -E "CONFIG_FS|CONFIG_SECURITY|CONFIG_NAMESPACES" .config
+    
+          echo "===== END CONFIG ANALYSIS ====="
 
       - name: Verify LKM
         run: |
