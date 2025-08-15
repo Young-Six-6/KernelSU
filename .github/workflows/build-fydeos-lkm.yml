@@ -119,27 +119,14 @@ jobs:
             -m KSU \
             -d MODULE_SIG \
             -d MODULE_SIG_ALL \
-            -e KALLSYMS \
-            -e KALLSYMS_ALL \
-            -e SECURITY \
-            -e SECURITY_SELINUX \
-            -e EXT4_FS \
-            -e SECURITY_PATH
+            -e LTO_CLANG_THIN \
+            -d LTO_NONE \
+            -d LTO_CLANG_FULL \
+            -e LTO_CLANG \
+            -d LTO_NONE \
+            -e LTO_CLANG_THIN
 
           yes "" | make O="${PWD}" olddefconfig
-          sed -i '/^CONFIG_LTO/d' .config  # 删除所有以 CONFIG_LTO 开头的行
-          sed -i '/^CONFIG_THINLTO/d' .config  # 额外清理 ThinLTO 相关残留
-          cat >> .config << EOF
-CONFIG_LTO=y
-CONFIG_LTO_CLANG=y
-CONFIG_LTO_CLANG_THIN=y
-CONFIG_LTO_NONE=n
-CONFIG_THINLTO=y
-EOF
-
-          echo "[DEBUG] LTO 配置强制修改后检查："
-          grep -E "^CONFIG_LTO|^CONFIG_THINLTO" .config || { echo "ERROR: LTO 配置强制修改失败！"; exit 1; }
-
           echo "[DEBUG] First check for CONFIG_KSU in .config"
           grep CONFIG_KSU .config || true
 
