@@ -149,6 +149,8 @@ jobs:
         working-directory: kernel
         run: |
           echo "[DEBUG] Listing all .ko files..."
+          ls -a
+          ls -a ./kernel
           find . -type f -name "*.ko" || echo "No .ko files found"
 
       - name: "Debug: upload config and KSU build files"
