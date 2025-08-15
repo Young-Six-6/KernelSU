@@ -49,6 +49,7 @@ jobs:
             libncurses-dev binutils-x86-64-linux-gnu gcc-x86-64-linux-gnu \
             rsync python3 device-tree-compiler kmod
           sudo ln -sf python3 /usr/bin/python
+          pip install ast-grep-cli
           export LLVM_VERSION=16
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
@@ -136,6 +137,36 @@ jobs:
             echo "CONFIG_KSU=m" >> .config
           fi
 
+      - name: Analyze kernel config
+        working-directory: kernel
+        run: |
+          echo "===== 内核关键配置检查 ====="
+          # 检查 KernelSU 配置（是否为模块模式）
+          echo "CONFIG_KSU 状态："
+          grep "^CONFIG_KSU=" .config || echo "CONFIG_KSU 未找到！"
+    
+          # 检查模块编译相关配置
+          echo -e "\n模块编译配置："
+          grep -E "^CONFIG_MODULES|^CONFIG_MODULE_UNLOAD" .config || echo "模块配置未开启！"
+    
+          # 检查 LTO 优化配置（匹配工作流的 Thin LTO 设定）
+          echo -e "\nLTO 优化配置："
+          grep -E "^CONFIG_LTO|^CONFIG_LTO_CLANG" .config || echo "LTO 配置未找到！"
+    
+          # 检查 KSU 依赖的 OVERLAY_FS（若需）
+          echo -e "\nOVERLAY_FS 配置（KSU 依赖）："
+          grep "^CONFIG_OVERLAY_FS=" .config || echo "CONFIG_OVERLAY_FS 未开启！"
+          # 验证 .config 文件是否存在，以及权限/大小
+          echo "===== .config 文件状态检查 ====="
+          ls -la .config  # 用 -la 显示隐藏文件，查看是否存在
+          if [ -f ".config" ]; then
+            echo ".config 文件存在，大小：$(du -sh .config)"
+            grep "^CONFIG_KSU=" .config  # 顺带检查关键配置
+          else
+            echo "ERROR: .config 文件不存在！"
+            exit 1  # 若文件不存在，直接中断，避免后续无效步骤
+          fi
+    
       - name: Build 6.6 kernel and LKM
         working-directory: kernel
         run: |
@@ -181,27 +212,26 @@ jobs:
             kernel/drivers/kernelsu/Makefile
           retention-days: 14  # 修正：正确放置 retention-days
 
-      - name: Analyze kernel config
+      - name: REAnalyze kernel config
         working-directory: kernel
         run: |
-          echo "===== KERNEL CONFIG ANALYSIS ====="
-          echo "CONFIG_KSU status:"
-          grep "^CONFIG_KSU=" .config || echo "CONFIG_KSU not found!"
+          echo "===== 内核关键配置检查 ====="
+          # 检查 KernelSU 配置（是否为模块模式）
+          echo "CONFIG_KSU 状态："
+          grep "^CONFIG_KSU=" .config || echo "CONFIG_KSU 未找到！"
     
-          echo "CONFIG_OVERLAY_FS status:"
-          grep "^CONFIG_OVERLAY_FS=" .config || echo "CONFIG_OVERLAY_FS not found!"
+          # 检查模块编译相关配置
+          echo -e "\n模块编译配置："
+          grep -E "^CONFIG_MODULES|^CONFIG_MODULE_UNLOAD" .config || echo "模块配置未开启！"
     
-          echo "MODULE related configs:"
-          grep -E "CONFIG_MODULES|CONFIG_MODULE_UNLOAD" .config
-          
-          echo "LTO related configs:"
-          grep -E "CONFIG_LTO|CONFIG_LTO_CLANG" .config
+          # 检查 LTO 优化配置（匹配工作流的 Thin LTO 设定）
+          echo -e "\nLTO 优化配置："
+          grep -E "^CONFIG_LTO|^CONFIG_LTO_CLANG" .config || echo "LTO 配置未找到！"
     
-          echo "KSU dependencies:"
-          grep -E "CONFIG_FS|CONFIG_SECURITY|CONFIG_NAMESPACES" .config
+          # 检查 KSU 依赖的 OVERLAY_FS（若需）
+          echo -e "\nOVERLAY_FS 配置（KSU 依赖）："
+          grep "^CONFIG_OVERLAY_FS=" .config || echo "CONFIG_OVERLAY_FS 未开启！"
     
-          echo "===== END CONFIG ANALYSIS ====="
-
       - name: Find kernelsu.ko path
         id: findko
         working-directory: kernel
