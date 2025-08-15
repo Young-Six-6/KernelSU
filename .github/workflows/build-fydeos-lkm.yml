@@ -119,6 +119,10 @@ jobs:
             -m KSU \
             -d MODULE_SIG \
             -d MODULE_SIG_ALL \
+            # 核心：启用 ThinLTO，禁用其他 LTO 模式
+            -e LTO_CLANG_THIN \
+            -d LTO_NONE \
+            -d LTO_CLANG_FULL \
             -e LTO_CLANG \
             -d LTO_NONE \
             -e LTO_CLANG_THIN
@@ -143,6 +147,13 @@ jobs:
       - name: Analyze kernel config
         working-directory: kernel
         run: |
+          echo -e "\n===== 符号导出相关配置验证 ====="
+          # 检查符号查询配置
+          grep -E "^CONFIG_KALLSYMS|^CONFIG_KALLSYMS_ALL" .config || echo "ERROR: KALLSYMS 配置未启用！"
+          # 检查 SELinux 配置
+          grep -E "^CONFIG_SECURITY|^CONFIG_SECURITY_SELINUX" .config || echo "ERROR: SELinux 配置未启用！"
+          # 检查文件系统配置
+          grep -E "^CONFIG_EXT4_FS|^CONFIG_SECURITY_PATH" .config || echo "ERROR: 文件系统配置未启用！"
           echo "===== 内核关键配置检查 ====="
           # 检查 KernelSU 配置（是否为模块模式）
           echo "CONFIG_KSU 状态："
@@ -169,6 +180,7 @@ jobs:
             echo "ERROR: .config 文件不存在！"
             exit 1  # 若文件不存在，直接中断，避免后续无效步骤
           fi
+          exit 1 # 临时，一次即可删除，删除！！！！！
     
       - name: Build 6.6 kernel and LKM
         working-directory: kernel
