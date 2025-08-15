@@ -119,7 +119,6 @@ jobs:
             -m KSU \
             -d MODULE_SIG \
             -d MODULE_SIG_ALL \
-            # 核心：启用 ThinLTO，禁用其他 LTO 模式
             -e LTO_CLANG_THIN \
             -d LTO_NONE \
             -d LTO_CLANG_FULL \
