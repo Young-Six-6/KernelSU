@@ -108,6 +108,9 @@ jobs:
           export DEFCONFIG=x86_64_defconfig
           make LLVM=1 LLVM_IAS=1 O="${PWD}" mrproper
           make LLVM=1 LLVM_IAS=1 O="${PWD}" ${DEFCONFIG} < /dev/null
+          printf "\n" >> drivers/media/platform/mediatek/vcodec/Kconfig
+          # 验证修复结果（可选，用于调试）
+          tail -n 1 drivers/media/platform/mediatek/vcodec/Kconfig | hexdump -C
 
           scripts/config --file .config \
             -e MODULES \
@@ -118,8 +121,9 @@ jobs:
             -d MODULE_SIG_ALL \
             -e LTO_CLANG \
             -d LTO_NONE \
-            -e LTO_CLANG_THIN
-
+            -e LTO_CLANG_THIN \
+            -e LTO=3 
+          yes "" | make O="${PWD}" olddefconfig
           echo "[DEBUG] First check for CONFIG_KSU in .config"
           grep CONFIG_KSU .config || true
 
@@ -127,8 +131,6 @@ jobs:
             echo "ERROR: CONFIG_KSU not set before olddefconfig!"
             exit 1
           fi
-
-          yes "" | make O="${PWD}" olddefconfig
 
           echo "[DEBUG] Second check for CONFIG_KSU in .config"
           grep CONFIG_KSU .config || true
