@@ -121,8 +121,8 @@ jobs:
             -d MODULE_SIG_ALL \
             -e LTO_CLANG \
             -d LTO_NONE \
-            -e LTO_CLANG_THIN \
-            -e LTO=3 
+            -e LTO_CLANG_THIN
+
           yes "" | make O="${PWD}" olddefconfig
           echo "[DEBUG] First check for CONFIG_KSU in .config"
           grep CONFIG_KSU .config || true
