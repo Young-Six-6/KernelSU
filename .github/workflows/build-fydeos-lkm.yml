@@ -179,7 +179,6 @@ jobs:
             echo "ERROR: .config 文件不存在！"
             exit 1  # 若文件不存在，直接中断，避免后续无效步骤
           fi
-          exit 1 # 临时，一次即可删除，删除！！！！！
     
       - name: Build 6.6 kernel and LKM
         working-directory: kernel
