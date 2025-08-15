@@ -160,9 +160,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-debug-logs
-          path: |
-           kernel/build-*.log
-        retention-days: 14
+          path: kernel/build-*.log
+          retention-days: 14  # 修正：正确放置 retention-days
 
       - name: "Debug: list built .ko files"
         working-directory: kernel
@@ -180,21 +179,10 @@ jobs:
             kernel/.config
             kernel/drivers/kernelsu/Kconfig
             kernel/drivers/kernelsu/Makefile
-          retention-days: 14
+          retention-days: 14  # 修正：正确放置 retention-days
 
-      - name: Find kernelsu.ko path
-        id: findko
-        working-directory: kernel
-        run: |
-          KO=$(find . -type f -name "kernelsu.ko" | head -n 1)
-          if [ -z "$KO" ]; then
-            echo "Error: kernelsu.ko not found!"
-            exit 1
-          fi
-          echo "ko_path=${KO}" >> $GITHUB_ENV
-# 该步骤需嵌套在 jobs.build-lkm.steps 列表内（建议放在「Configure 6.6 kernel for modules」步骤之后，确保 .config 已生成）
       - name: Analyze kernel config
-        working-directory: kernel  # 指定工作目录为 kernel 源码根目录
+        working-directory: kernel
         run: |
           echo "===== KERNEL CONFIG ANALYSIS ====="
           echo "CONFIG_KSU status:"
@@ -214,6 +202,17 @@ jobs:
     
           echo "===== END CONFIG ANALYSIS ====="
 
+      - name: Find kernelsu.ko path
+        id: findko
+        working-directory: kernel
+        run: |
+          KO=$(find . -type f -name "kernelsu.ko" | head -n 1)
+          if [ -z "$KO" ]; then
+            echo "Error: kernelsu.ko not found!"
+            exit 1
+          fi
+          echo "ko_path=${KO}" >> $GITHUB_ENV
+
       - name: Verify LKM
         run: |
           modinfo "${{ env.ko_path }}"
@@ -223,4 +222,4 @@ jobs:
         with:
           name: kernelsu-ko-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
           path: ${{ env.ko_path }}
-          retention-days: 14
+          retention-days: 14  # 修正：正确放置 retention-days
