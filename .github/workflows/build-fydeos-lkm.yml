@@ -1,4 +1,4 @@
-name: Build FydeOS KernelSU LKM (x86_64) with 6.6 Kernel
+name: Build FydeOS KernelSU Built-in (x86_64) with 6.6 Kernel
 
 on:
   push:
@@ -24,7 +24,7 @@ env:
   git_tag: chromeos-6.6
 
 jobs:
-  build-lkm:
+  build-builtin:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -87,8 +87,9 @@ jobs:
             echo 'source "drivers/kernelsu/Kconfig"' >> "$DRIVER_KCONFIG"
           fi
 
-          sed -i 's/bool "KernelSU support"/tristate "KernelSU support"/' drivers/kernelsu/Kconfig
-          sed -i 's/default y/default m/' drivers/kernelsu/Kconfig
+          # 关键修改1：恢复KSU为bool类型（仅支持内置/关闭），默认启用（y）
+          sed -i 's/tristate "KernelSU support"/bool "KernelSU support"/' drivers/kernelsu/Kconfig
+          sed -i 's/default m/default y/' drivers/kernelsu/Kconfig
           sed -i 's/-dirty//g' scripts/setlocalversion
 
       - name: Extract kernel version
@@ -102,21 +103,20 @@ jobs:
           KSU_VERSION=$(($(git rev-list --count HEAD) + 10200))
           echo "kernelsu_version=$KSU_VERSION" >> $GITHUB_ENV
 
-      - name: Configure 6.6 kernel for modules
+      - name: Configure 6.6 kernel for Built-in KernelSU
         working-directory: kernel
         run: |
           export DEFCONFIG=x86_64_defconfig
           make LLVM=1 LLVM_IAS=1 O="${PWD}" mrproper
           make LLVM=1 LLVM_IAS=1 O="${PWD}" ${DEFCONFIG} < /dev/null
           printf "\n" >> drivers/media/platform/mediatek/vcodec/Kconfig
-          # 验证修复结果（可选，用于调试）
           tail -n 1 drivers/media/platform/mediatek/vcodec/Kconfig | hexdump -C
 
           scripts/config --file .config \
             -e MODULES \
             -e OVERLAY_FS \
             -e MODULE_UNLOAD \
-            -y KSU \
+            -e KSU  # 关键修改2：将KSU设为内置启用（-e = enable，替代原-m模块模式）
             -d MODULE_SIG \
             -d MODULE_SIG_ALL \
             -e LTO_CLANG_THIN \
@@ -127,20 +127,13 @@ jobs:
             -e LTO_CLANG_THIN
 
           yes "" | make O="${PWD}" olddefconfig
-          echo "[DEBUG] First check for CONFIG_KSU in .config"
+          echo "[DEBUG] Check CONFIG_KSU in .config (must be y)"
           grep CONFIG_KSU .config || true
 
+          # 验证KSU是否为内置模式，否则报错
           if ! grep -q "^CONFIG_KSU=y" .config; then
-            echo "ERROR: CONFIG_KSU not set before olddefconfig!"
+            echo "ERROR: CONFIG_KSU not set to built-in (y)!"
             exit 1
-          fi
-
-          echo "[DEBUG] Second check for CONFIG_KSU in .config"
-          grep CONFIG_KSU .config || true
-
-          if ! grep -q "^CONFIG_KSU=y" .config; then
-            echo "WARNING: CONFIG_KSU disabled by olddefconfig, forcing enable..."
-            echo "CONFIG_KSU=y" >> .config
           fi
 
       - name: Apply KernelSU export symbols patch
@@ -152,56 +145,37 @@ jobs:
         working-directory: kernel
         run: |
           echo -e "\n===== 符号导出相关配置验证 ====="
-          # 检查符号查询配置
           grep -E "^CONFIG_KALLSYMS|^CONFIG_KALLSYMS_ALL" .config || echo "ERROR: KALLSYMS 配置未启用！"
-          # 检查 SELinux 配置
           grep -E "^CONFIG_SECURITY|^CONFIG_SECURITY_SELINUX" .config || echo "ERROR: SELinux 配置未启用！"
-          # 检查文件系统配置
           grep -E "^CONFIG_EXT4_FS|^CONFIG_SECURITY_PATH" .config || echo "ERROR: 文件系统配置未启用！"
           echo "===== 内核关键配置检查 ====="
-          # 检查 KernelSU 配置（是否为模块模式）
-          echo "CONFIG_KSU 状态："
+          echo "CONFIG_KSU 状态（需为 y）："
           grep "^CONFIG_KSU=" .config || echo "CONFIG_KSU 未找到！"
-    
-          # 检查模块编译相关配置
           echo -e "\n模块编译配置："
           grep -E "^CONFIG_MODULES|^CONFIG_MODULE_UNLOAD" .config || echo "模块配置未开启！"
-    
-          # 检查 LTO 优化配置（匹配工作流的 Thin LTO 设定）
           echo -e "\nLTO 优化配置："
           grep -E "^CONFIG_LTO|^CONFIG_LTO_CLANG" .config || echo "LTO 配置未找到！"
-    
-          # 检查 KSU 依赖的 OVERLAY_FS（若需）
           echo -e "\nOVERLAY_FS 配置（KSU 依赖）："
           grep "^CONFIG_OVERLAY_FS=" .config || echo "CONFIG_OVERLAY_FS 未开启！"
-          # 验证 .config 文件是否存在，以及权限/大小
           echo "===== .config 文件状态检查 ====="
-          ls -la .config  # 用 -la 显示隐藏文件，查看是否存在
+          ls -la .config
           if [ -f ".config" ]; then
             echo ".config 文件存在，大小：$(du -sh .config)"
-            grep "^CONFIG_KSU=" .config  # 顺带检查关键配置
+            grep "^CONFIG_KSU=" .config
           else
             echo "ERROR: .config 文件不存在！"
-            exit 1  # 若文件不存在，直接中断，避免后续无效步骤
+            exit 1
           fi
-    
-      - name: Build 6.6 kernel and LKM
+
+      - name: Build 6.6 kernel (with built-in KernelSU)
         working-directory: kernel
         run: |
+          # 关键修改3：删除模块构建步骤（modules/modules_install），仅构建内核镜像
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
-          mkdir -p ./modules
-          timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} INSTALL_MOD_PATH=./modules modules_install
-          # 保存详细构建日志
+          # 保存构建日志
           make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux 2>&1 | tee build-vmlinux.log
-          make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) modules 2>&1 | tee build-modules.log
-    
-          # 单独构建KernelSU模块并捕获详细输出
-          echo "[+] Building KernelSU module specifically with debug"
-          make LLVM=1 LLVM_IAS=1 O=${PWD} M=drivers/kernelsu V=1 2>&1 | tee build-kernelsu.log || true
-    
-          # 上传详细构建日志
+          make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage 2>&1 | tee build-bzImage.log
           echo "[DEBUG] Uploading build logs for analysis"
           ls -lh build-*.log
 
@@ -210,15 +184,14 @@ jobs:
         with:
           name: build-debug-logs
           path: kernel/build-*.log
-          retention-days: 14  # 修正：正确放置 retention-days
+          retention-days: 14
 
-      - name: "Debug: list built .ko files"
+      - name: "Debug: list built kernel images"
         working-directory: kernel
         run: |
-          echo "[DEBUG] Listing all .ko files..."
-          ls -a
-          ls -a ./kernel
-          find . -type f -name "*.ko" || echo "No .ko files found"
+          echo "[DEBUG] Listing kernel images..."
+          ls -la ./arch/x86/boot/bzImage  # 验证bzImage是否存在
+          ls -la vmlinux
 
       - name: "Debug: upload config and KSU build files"
         uses: actions/upload-artifact@v4
@@ -228,11 +201,31 @@ jobs:
             kernel/.config
             kernel/drivers/kernelsu/Kconfig
             kernel/drivers/kernelsu/Makefile
-          retention-days: 14  # 修正：正确放置 retention-days
+          retention-days: 14
 
-      - name: Upload built kernel image (bzImage)
+      - name: REAnalyze kernel config
+        working-directory: kernel
+        run: |
+          echo "===== 内核关键配置检查 ====="
+          echo "CONFIG_KSU 状态（需为 y）："
+          grep "^CONFIG_KSU=" .config || echo "CONFIG_KSU 未找到！"
+          echo -e "\n模块编译配置："
+          grep -E "^CONFIG_MODULES|^CONFIG_MODULE_UNLOAD" .config || echo "模块配置未开启！"
+          echo -e "\nLTO 优化配置："
+          grep -E "^CONFIG_LTO|^CONFIG_LTO_CLANG" .config || echo "LTO 配置未找到！"
+          echo -e "\nOVERLAY_FS 配置（KSU 依赖）："
+          grep "^CONFIG_OVERLAY_FS=" .config || echo "CONFIG_OVERLAY_FS 未开启！"
+
+      - name: Verify built-in KernelSU (check vmlinux symbols)
+        working-directory: kernel
+        run: |
+          # 验证KernelSU符号是否已编译进内核（替代原modinfo验证）
+          llvm-nm vmlinux | grep -E "ksu_|__ksu_" || echo "WARNING: KSU symbols not found in vmlinux!"
+
+      - name: Upload kernel with built-in KernelSU (bzImage)
         uses: actions/upload-artifact@v4
         with:
-           name: kernel-image-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
-           path: ${{ github.workspace }}/kernel/arch/x86/boot/bzImage  # x86_64 架构的内核镜像路径
-           retention-days: 14
+          # 产物名称改为内核镜像标识，包含内核版本和KSU版本
+          name: bzImage-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
+          path: kernel/arch/x86/boot/bzImage  # 上传内置KSU的内核镜像
+          retention-days: 14
