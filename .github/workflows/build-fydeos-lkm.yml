@@ -143,6 +143,11 @@ jobs:
             echo "CONFIG_KSU=m" >> .config
           fi
 
+      - name: Apply KernelSU export symbols patch
+        run: |
+          cd /home/runner/work/KernelSU/KernelSU/kernel
+          patch -p1 < ../../patches/export_ksu_symbols.patch
+
       - name: Analyze kernel config
         working-directory: kernel
         run: |

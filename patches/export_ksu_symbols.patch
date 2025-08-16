@@ -1,0 +1,47 @@
+diff --git a/fs/ext4/sysfs.c b/fs/ext4/sysfs.c
+@@
+ EXPORT_SYMBOL(ext4_unregister_sysfs);
++EXPORT_SYMBOL(ext4_unregister_sysfs);
+
+diff --git a/fs/namespace.c b/fs/namespace.c
+@@
+ EXPORT_SYMBOL(path_umount);
++EXPORT_SYMBOL(path_umount);
+
+diff --git a/kernel/nsproxy.c b/kernel/nsproxy.c
+@@
+ EXPORT_SYMBOL(init_nsproxy);
++EXPORT_SYMBOL(init_nsproxy);
+
+diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
+@@
+ EXPORT_SYMBOL_GPL(kallsyms_lookup_name);
++EXPORT_SYMBOL(kallsyms_lookup_name);
+
+diff --git a/security/security.c b/security/security.c
+@@
+ EXPORT_SYMBOL(security_hook_heads);
++EXPORT_SYMBOL(security_hook_heads);
+
+diff --git a/arch/x86/mm/init.c b/arch/x86/mm/init.c
+@@
+ EXPORT_SYMBOL(phys_to_page);
++EXPORT_SYMBOL(phys_to_page);
+
+diff --git a/mm/maccess.c b/mm/maccess.c
+@@
+ EXPORT_SYMBOL(strncpy_from_user_nofault);
++EXPORT_SYMBOL(strncpy_from_user_nofault);
+
+diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
++/* 导出 SELinux 内部符号给 KernelSU 使用 */
++extern struct selinux_state selinux_state;
++extern struct selinux_blob_sizes selinux_blob_sizes;
++
++EXPORT_SYMBOL(selinux_state);
++EXPORT_SYMBOL(selinux_blob_sizes);
+
+diff --git a/kernel/symtab_search.c b/kernel/symtab_search.c
+new file mode 100644
+--- /dev/null
++++ b/kernel/symtab_search_
