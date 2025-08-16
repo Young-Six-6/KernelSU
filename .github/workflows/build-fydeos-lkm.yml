@@ -90,6 +90,8 @@ jobs:
           sed -i 's/bool "KernelSU support"/tristate "KernelSU support"/' drivers/kernelsu/Kconfig
           sed -i 's/default y/default m/' drivers/kernelsu/Kconfig
           sed -i 's/-dirty//g' scripts/setlocalversion
+          ls -la /home/runner/work/KernelSU/KernelSU
+          ls -la /home/runner/work/KernelSU/KernelSU/patches
 
       - name: Extract kernel version
         working-directory: kernel
