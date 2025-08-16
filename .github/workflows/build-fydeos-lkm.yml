@@ -116,7 +116,7 @@ jobs:
             -e MODULES \
             -e OVERLAY_FS \
             -e MODULE_UNLOAD \
-            -m KSU \
+            -y KSU \
             -d MODULE_SIG \
             -d MODULE_SIG_ALL \
             -e LTO_CLANG_THIN \
@@ -130,7 +130,7 @@ jobs:
           echo "[DEBUG] First check for CONFIG_KSU in .config"
           grep CONFIG_KSU .config || true
 
-          if ! grep -q "^CONFIG_KSU=m" .config; then
+          if ! grep -q "^CONFIG_KSU=y" .config; then
             echo "ERROR: CONFIG_KSU not set before olddefconfig!"
             exit 1
           fi
@@ -138,9 +138,9 @@ jobs:
           echo "[DEBUG] Second check for CONFIG_KSU in .config"
           grep CONFIG_KSU .config || true
 
-          if ! grep -q "^CONFIG_KSU=m" .config; then
+          if ! grep -q "^CONFIG_KSU=y" .config; then
             echo "WARNING: CONFIG_KSU disabled by olddefconfig, forcing enable..."
-            echo "CONFIG_KSU=m" >> .config
+            echo "CONFIG_KSU=y" >> .config
           fi
 
       - name: Apply KernelSU export symbols patch
@@ -230,44 +230,9 @@ jobs:
             kernel/drivers/kernelsu/Makefile
           retention-days: 14  # 修正：正确放置 retention-days
 
-      - name: REAnalyze kernel config
-        working-directory: kernel
-        run: |
-          echo "===== 内核关键配置检查 ====="
-          # 检查 KernelSU 配置（是否为模块模式）
-          echo "CONFIG_KSU 状态："
-          grep "^CONFIG_KSU=" .config || echo "CONFIG_KSU 未找到！"
-    
-          # 检查模块编译相关配置
-          echo -e "\n模块编译配置："
-          grep -E "^CONFIG_MODULES|^CONFIG_MODULE_UNLOAD" .config || echo "模块配置未开启！"
-    
-          # 检查 LTO 优化配置（匹配工作流的 Thin LTO 设定）
-          echo -e "\nLTO 优化配置："
-          grep -E "^CONFIG_LTO|^CONFIG_LTO_CLANG" .config || echo "LTO 配置未找到！"
-    
-          # 检查 KSU 依赖的 OVERLAY_FS（若需）
-          echo -e "\nOVERLAY_FS 配置（KSU 依赖）："
-          grep "^CONFIG_OVERLAY_FS=" .config || echo "CONFIG_OVERLAY_FS 未开启！"
-    
-      - name: Find kernelsu.ko path
-        id: findko
-        working-directory: kernel
-        run: |
-          KO=$(find . -type f -name "kernelsu.ko" | head -n 1)
-          if [ -z "$KO" ]; then
-            echo "Error: kernelsu.ko not found!"
-            exit 1
-          fi
-          echo "ko_path=${KO}" >> $GITHUB_ENV
-
-      - name: Verify LKM
-        run: |
-          modinfo "${{ env.ko_path }}"
-
-      - name: Upload kernelsu.ko
+      - name: Upload built kernel image (bzImage)
         uses: actions/upload-artifact@v4
         with:
-          name: kernelsu-ko-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
-          path: ${{ env.ko_path }}
-          retention-days: 14  # 修正：正确放置 retention-days
+           name: kernel-image-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
+           path: ${{ github.workspace }}/kernel/arch/x86/boot/bzImage  # x86_64 架构的内核镜像路径
+           retention-days: 14

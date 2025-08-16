@@ -44,4 +44,12 @@ diff --git a/security/selinux/include/security.h b/security/selinux/include/secu
 diff --git a/kernel/symtab_search.c b/kernel/symtab_search.c
 new file mode 100644
 --- /dev/null
-+++ b/kernel/symtab_search_
++++ b/kernel/symtab_search.c
+@@ -0,0 +1,8 @@
++#include <linux/export.h>
++/* 空实现，仅保证链接成功 */
++void *symtab_search(const char *name)
++{
++    return NULL;
++}
++EXPORT_SYMBOL(symtab_search);
