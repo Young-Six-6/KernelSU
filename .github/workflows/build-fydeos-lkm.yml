@@ -147,7 +147,7 @@ jobs:
       - name: Apply KernelSU export symbols patch
         run: |
           cd /home/runner/work/KernelSU/KernelSU/kernel
-          patch -p1 < /home/runner/work/KernelSU/KernelSU/patches/export_ksu_symbols.patch
+          patch -p1 < /home/runner/work/KernelSU/KernelSU/KernelSU/patches/export_ksu_symbols.patch
 
       - name: Analyze kernel config
         working-directory: kernel
