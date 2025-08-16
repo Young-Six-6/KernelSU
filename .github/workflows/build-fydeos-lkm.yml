@@ -87,7 +87,7 @@ jobs:
             echo 'source "drivers/kernelsu/Kconfig"' >> "$DRIVER_KCONFIG"
           fi
 
-          # 关键修改1：恢复KSU为bool类型（仅支持内置/关闭），默认启用（y）
+          # 恢复KSU为bool类型（仅内置/关闭），默认启用
           sed -i 's/tristate "KernelSU support"/bool "KernelSU support"/' drivers/kernelsu/Kconfig
           sed -i 's/default m/default y/' drivers/kernelsu/Kconfig
           sed -i 's/-dirty//g' scripts/setlocalversion
@@ -112,11 +112,12 @@ jobs:
           printf "\n" >> drivers/media/platform/mediatek/vcodec/Kconfig
           tail -n 1 drivers/media/platform/mediatek/vcodec/Kconfig | hexdump -C
 
+          # 修复：确保所有参数通过反斜杠\连接，属于同一命令（解决-d命令不存在错误）
           scripts/config --file .config \
             -e MODULES \
             -e OVERLAY_FS \
             -e MODULE_UNLOAD \
-            -e KSU  # 关键修改2：将KSU设为内置启用（-e = enable，替代原-m模块模式）
+            -e KSU \
             -d MODULE_SIG \
             -d MODULE_SIG_ALL \
             -e LTO_CLANG_THIN \
@@ -170,7 +171,7 @@ jobs:
       - name: Build 6.6 kernel (with built-in KernelSU)
         working-directory: kernel
         run: |
-          # 关键修改3：删除模块构建步骤（modules/modules_install），仅构建内核镜像
+          # 仅构建内核镜像，删除模块相关步骤
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) vmlinux
           timeout 3600 make LLVM=1 LLVM_IAS=1 O=${PWD} -j$(nproc) bzImage
           # 保存构建日志
@@ -219,13 +220,12 @@ jobs:
       - name: Verify built-in KernelSU (check vmlinux symbols)
         working-directory: kernel
         run: |
-          # 验证KernelSU符号是否已编译进内核（替代原modinfo验证）
+          # 验证KernelSU符号是否已编译进内核
           llvm-nm vmlinux | grep -E "ksu_|__ksu_" || echo "WARNING: KSU symbols not found in vmlinux!"
 
       - name: Upload kernel with built-in KernelSU (bzImage)
         uses: actions/upload-artifact@v4
         with:
-          # 产物名称改为内核镜像标识，包含内核版本和KSU版本
           name: bzImage-fydeos-x86_64-${{ env.version }}-ksu${{ env.kernelsu_version }}
           path: kernel/arch/x86/boot/bzImage  # 上传内置KSU的内核镜像
           retention-days: 14
